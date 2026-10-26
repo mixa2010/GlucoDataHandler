@@ -1204,13 +1204,14 @@ class MainActivity : AppCompatActivity(), NotifierInterface {
 
     private fun updateStatisticsTable() {
         tableStatistics.removeViews(1, maxOf(0, tableStatistics.childCount - 1))
-        GlucoseStatistics.update()
+        updateStatisticsPeriodDisplay()
         if(GlucoseStatistics.hasStatistics) {
             val selectedDays = sharedPref.getInt(Constants.SHARED_PREF_MAIN_STATISTICS_DAYS, 7)
             val statData = GlucoseStatistics.getStatistics(selectedDays)
             Log.d(LOG_ID, "Create statistics for ${statData.days}d with ${statData.count} data points - hasData: ${statData.hasData}")
             if(!statData.hasData) {
-                changeStatisticsPeriod(-1)
+                checkTableVisibility(tableStatistics)
+                return
             }
             val name = if(statData.days == 7) resources.getString(CR.string.info_label_average) + " ⌀" else resources.getString(CR.string.info_label_average)
             tableStatistics.addView(createRow(name, GlucoDataUtils.getDisplayGlucoseAsString(statData.averageGlucose, true)))
@@ -1226,43 +1227,32 @@ class MainActivity : AppCompatActivity(), NotifierInterface {
             }
             tableStatistics.addView(createLongValueRow(CR.string.gmi, "${DecimalFormat("#.#").format(statData.gmiPercent)}% (${statData.gmiMmolPerMol} ${resources.getString(CR.string.unit_gmi)})"))
             tableStatistics.addView(createLongValueRow(CR.string.hba1c, "${DecimalFormat("#.#").format(statData.hba1cPercent)}% (${statData.hba1cMmolPerMol} ${resources.getString(CR.string.unit_gmi)})"))
-            if(statData.hasData) {
-                tableStatistics.addView(createProgressBarRow(GlucoseStatistics.getStatisticsTitle(this, AlarmType.VERY_HIGH, statData.usesStandardRanges), statData.percentVeryHigh, ReceiveData.getAlarmTypeColor(AlarmType.VERY_HIGH)))
-                tableStatistics.addView(createProgressBarRow(GlucoseStatistics.getStatisticsTitle(this, AlarmType.HIGH, statData.usesStandardRanges), statData.percentHigh, ReceiveData.getAlarmTypeColor(AlarmType.HIGH)))
-                tableStatistics.addView(createProgressBarRow(GlucoseStatistics.getStatisticsTitle(this, AlarmType.OK, statData.usesStandardRanges), statData.percentInRange, ReceiveData.getAlarmTypeColor(AlarmType.OK)))
-                tableStatistics.addView(createProgressBarRow(GlucoseStatistics.getStatisticsTitle(this, AlarmType.LOW, statData.usesStandardRanges), statData.percentLow, ReceiveData.getAlarmTypeColor(AlarmType.LOW)))
-                tableStatistics.addView(createProgressBarRow(GlucoseStatistics.getStatisticsTitle(this, AlarmType.VERY_LOW, statData.usesStandardRanges), statData.percentVeryLow, ReceiveData.getAlarmTypeColor(AlarmType.VERY_LOW)))
-            }
+            tableStatistics.addView(createProgressBarRow(GlucoseStatistics.getStatisticsTitle(this, AlarmType.VERY_HIGH, statData.usesStandardRanges), statData.percentVeryHigh, ReceiveData.getAlarmTypeColor(AlarmType.VERY_HIGH)))
+            tableStatistics.addView(createProgressBarRow(GlucoseStatistics.getStatisticsTitle(this, AlarmType.HIGH, statData.usesStandardRanges), statData.percentHigh, ReceiveData.getAlarmTypeColor(AlarmType.HIGH)))
+            tableStatistics.addView(createProgressBarRow(GlucoseStatistics.getStatisticsTitle(this, AlarmType.OK, statData.usesStandardRanges), statData.percentInRange, ReceiveData.getAlarmTypeColor(AlarmType.OK)))
+            tableStatistics.addView(createProgressBarRow(GlucoseStatistics.getStatisticsTitle(this, AlarmType.LOW, statData.usesStandardRanges), statData.percentLow, ReceiveData.getAlarmTypeColor(AlarmType.LOW)))
+            tableStatistics.addView(createProgressBarRow(GlucoseStatistics.getStatisticsTitle(this, AlarmType.VERY_LOW, statData.usesStandardRanges), statData.percentVeryLow, ReceiveData.getAlarmTypeColor(AlarmType.VERY_LOW)))
         }
         checkTableVisibility(tableStatistics)
     }
 
     private fun changeStatisticsPeriod(direction: Int) {
-        val periods = listOf(1, 7, 30, 90)
         val selectedDays = sharedPref.getInt(Constants.SHARED_PREF_MAIN_STATISTICS_DAYS, 7)
-        val selectedIndex = periods.indexOf(selectedDays).takeIf { it >= 0 } ?: 1
-        val nextIndex = (selectedIndex + direction).coerceIn(periods.indices)
-        if(nextIndex == selectedIndex)
+        val nextDays = GlucoseStatistics.stepPeriodDays(selectedDays, direction)
+        if(nextDays == selectedDays)
             return
         sharedPref.edit {
-            putInt(Constants.SHARED_PREF_MAIN_STATISTICS_DAYS, periods[nextIndex])
+            putInt(Constants.SHARED_PREF_MAIN_STATISTICS_DAYS, nextDays)
         }
-        updateStatisticsPeriodDisplay()
         updateStatisticsTable()
     }
 
     private fun updateStatisticsPeriodDisplay() {
         val selectedDays = sharedPref.getInt(Constants.SHARED_PREF_MAIN_STATISTICS_DAYS, 7)
-        val supportedPeriods = setOf(1, 7, 30, 90)
-        var days = selectedDays.takeIf { it in supportedPeriods } ?: 7
-        var index = listOf(1, 7, 30, 90).indexOf(days)
         GlucoseStatistics.update()
-        var statData = GlucoseStatistics.getStatistics(days)
-        while(!statData.hasData && index > 0) {
-            index -= 1
-            days = supportedPeriods.toIntArray()[index]
-            statData = GlucoseStatistics.getStatistics(days)
-        }
+        val days = GlucoseStatistics.resolveActivePeriodDays(selectedDays)
+        val index = GlucoseStatistics.SUPPORTED_PERIODS.indexOf(days)
+        val statData = GlucoseStatistics.getStatistics(days)
         if(days != selectedDays) {
             sharedPref.edit {
                 putInt(Constants.SHARED_PREF_MAIN_STATISTICS_DAYS, days)
@@ -1277,7 +1267,7 @@ class MainActivity : AppCompatActivity(), NotifierInterface {
             txtStatisticsPeriod.setOnClickListener(null)
 
         btnStatPrevious.isEnabled = index > 0
-        btnStatNext.isEnabled = statData.hasData && index < 3 && GlucoseStatistics.getStatistics(supportedPeriods.toIntArray()[index + 1]).hasData
+        btnStatNext.isEnabled = statData.hasData && index < GlucoseStatistics.SUPPORTED_PERIODS.lastIndex && GlucoseStatistics.getStatistics(GlucoseStatistics.SUPPORTED_PERIODS[index + 1]).hasData
         btnStatPrevious.alpha = if(btnStatPrevious.isEnabled) 1F else 0.4F
         btnStatNext.alpha = if(btnStatNext.isEnabled) 1F else 0.4F
     }
